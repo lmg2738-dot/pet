@@ -4,17 +4,24 @@ import OpenAI from "openai";
 import { analysisResponseSchema } from "@/lib/validations";
 import type { AnalysisResponse } from "@/types/database";
 import {
-  blockModel,
+  blockModelPermanently,
   getFreeVisionModels,
   getOpenRouterApiKey,
-  isModelUnavailableError,
   isOpenRouterConfigured,
+  markRateLimited,
 } from "@/lib/openrouter/models";
 import {
   isAnalysisMostlyKorean,
   KOREAN_RETRY_INSTRUCTION,
   localizeAnalysisResponse,
 } from "@/lib/openrouter/korean";
+import {
+  buildAllModelsFailedMessage,
+  buildRateLimitMessage,
+  isInsufficientCreditsError,
+  isModelUnavailableError,
+  isRateLimitError,
+} from "@/lib/openrouter/errors";
 import { resolveUploadBuffer } from "@/lib/storage/media";
 
 const ANALYSIS_PROMPT = `당신은 PawInsight AI 반려동물 건강 관찰 도우미입니다.
@@ -176,6 +183,7 @@ export async function analyzePetImage(
   }
 
   const errors: string[] = [];
+  let rateLimitCount = 0;
 
   for (const model of models) {
     try {
@@ -187,13 +195,23 @@ export async function analyzePetImage(
       );
 
       if (!isAnalysisMostlyKorean(result)) {
-        result = await requestAnalysis(
-          client,
-          model.id,
-          visionUrl,
-          petName,
-          KOREAN_RETRY_INSTRUCTION
-        );
+        try {
+          result = await requestAnalysis(
+            client,
+            model.id,
+            visionUrl,
+            petName,
+            KOREAN_RETRY_INSTRUCTION
+          );
+        } catch (retryErr) {
+          if (isRateLimitError(retryErr)) {
+            markRateLimited(model.id);
+            rateLimitCount++;
+            errors.push(`${model.id}: 일일 한도 초과 (429)`);
+            continue;
+          }
+          throw retryErr;
+        }
       }
 
       return {
@@ -205,15 +223,29 @@ export async function analyzePetImage(
       const message = err instanceof Error ? err.message : String(err);
       errors.push(`${model.id}: ${message}`);
 
+      if (isRateLimitError(err)) {
+        markRateLimited(model.id);
+        rateLimitCount++;
+        continue;
+      }
+
+      if (isInsufficientCreditsError(err)) {
+        await blockModelPermanently(model.id);
+        continue;
+      }
+
       if (isModelUnavailableError(err)) {
-        await blockModel(model.id);
+        await blockModelPermanently(model.id);
+        continue;
       }
     }
   }
 
-  throw new Error(
-    `모든 무료 Vision 모델 시도 실패:\n${errors.slice(0, 5).join("\n")}`
-  );
+  if (rateLimitCount > 0 && rateLimitCount === models.length) {
+    throw new Error(buildRateLimitMessage(models.length));
+  }
+
+  throw new Error(buildAllModelsFailedMessage(errors));
 }
 
 export { isOpenRouterConfigured };
