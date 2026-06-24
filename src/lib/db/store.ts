@@ -1,5 +1,3 @@
-import fs from "fs/promises";
-import path from "path";
 import { randomUUID } from "crypto";
 import type {
   AnalysisResult,
@@ -10,39 +8,7 @@ import type {
   Pet,
 } from "@/types/database";
 import { subDays, subMonths } from "date-fns";
-
-const DB_DIR = path.join(process.cwd(), "data", "db");
-
-interface TableCacheEntry {
-  mtimeMs: number;
-  data: unknown[];
-}
-
-const tableCache = new Map<string, TableCacheEntry>();
-
-async function readTable<T>(name: string): Promise<T[]> {
-  const filePath = path.join(DB_DIR, `${name}.json`);
-  try {
-    const stat = await fs.stat(filePath);
-    const cached = tableCache.get(name);
-    if (cached && cached.mtimeMs === stat.mtimeMs) {
-      return cached.data as T[];
-    }
-    const raw = await fs.readFile(filePath, "utf-8");
-    const data = JSON.parse(raw) as T[];
-    tableCache.set(name, { mtimeMs: stat.mtimeMs, data });
-    return data;
-  } catch {
-    return [];
-  }
-}
-
-async function writeTable<T>(name: string, rows: T[]): Promise<void> {
-  await fs.mkdir(DB_DIR, { recursive: true });
-  const filePath = path.join(DB_DIR, `${name}.json`);
-  await fs.writeFile(filePath, JSON.stringify(rows, null, 2), "utf-8");
-  tableCache.delete(name);
-}
+import { readTable, writeTable } from "@/lib/db/adapter";
 
 function sortByDateDesc<T extends { created_at?: string; recorded_at?: string }>(
   items: T[],

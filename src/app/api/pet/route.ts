@@ -37,7 +37,9 @@ export async function POST(request: NextRequest) {
       path: "/",
     });
     return response;
-  } catch {
-    return jsonError("Failed to create pet.", 500);
+  } catch (err) {
+    const message =
+      err instanceof Error ? err.message : "Failed to create pet.";
+    return jsonError(message, 500);
   }
 }

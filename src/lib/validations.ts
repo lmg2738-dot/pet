@@ -33,6 +33,7 @@ export const imageUrlSchema = z
   .refine(
     (val) =>
       val.startsWith("/uploads/") ||
+      val.startsWith("/api/media/") ||
       val.startsWith("http://") ||
       val.startsWith("https://"),
     { message: "Invalid image URL" }

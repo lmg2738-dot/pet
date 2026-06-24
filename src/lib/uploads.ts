@@ -1,13 +1,17 @@
-import fs from "fs/promises";
-import path from "path";
-import { randomUUID } from "crypto";
 import {
   ALLOWED_IMAGE_TYPES,
   MAX_IMAGE_SIZE,
 } from "@/lib/validations";
+import { assertStorageReady, isVercel, useRedisStorage } from "@/lib/db/config";
+import {
+  createUploadFilename,
+  extToMime,
+  getMediaUrl,
+  saveUploadToFile,
+  saveUploadToRedis,
+} from "@/lib/storage/media";
 
 const ALLOWED_EXTENSIONS = new Set(["jpg", "jpeg", "png", "webp", "gif"]);
-const UPLOAD_DIR = path.join(process.cwd(), "public", "uploads");
 
 export function validateImageFile(file: File): string | null {
   if (!ALLOWED_IMAGE_TYPES.includes(file.type as (typeof ALLOWED_IMAGE_TYPES)[number])) {
@@ -28,20 +32,29 @@ export async function savePetImage(
   petId: string,
   file: File
 ): Promise<{ relativePath: string; absolutePath: string }> {
+  assertStorageReady();
+
   const ext = file.name.split(".").pop()?.toLowerCase() ?? "jpg";
-  const dir = path.join(UPLOAD_DIR, ownerId, petId);
-  await fs.mkdir(dir, { recursive: true });
-
-  const filename = `${Date.now()}-${randomUUID().slice(0, 8)}.${ext}`;
-  const absolutePath = path.join(dir, filename);
+  const filename = await createUploadFilename(ext);
   const buffer = Buffer.from(await file.arrayBuffer());
-  await fs.writeFile(absolutePath, buffer);
+  const mime = extToMime(ext);
 
-  const relativePath = `/uploads/${ownerId}/${petId}/${filename}`;
+  if (useRedisStorage() || isVercel()) {
+    await saveUploadToRedis(ownerId, petId, filename, buffer, mime);
+    const relativePath = getMediaUrl(ownerId, petId, filename);
+    return { relativePath, absolutePath: relativePath };
+  }
+
+  const absolutePath = await saveUploadToFile(ownerId, petId, filename, buffer);
+  const relativePath = getMediaUrl(ownerId, petId, filename);
   return { relativePath, absolutePath };
 }
 
 export function toPublicImageUrl(relativePath: string, request: Request): string {
+  if (relativePath.startsWith("http://") || relativePath.startsWith("https://")) {
+    return relativePath;
+  }
+
   const host = request.headers.get("host") ?? "localhost:50004";
   const base =
     process.env.NEXT_PUBLIC_APP_URL ??

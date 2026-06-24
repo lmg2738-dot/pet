@@ -15,6 +15,7 @@ import {
   KOREAN_RETRY_INSTRUCTION,
   localizeAnalysisResponse,
 } from "@/lib/openrouter/korean";
+import { resolveUploadBuffer } from "@/lib/storage/media";
 
 const ANALYSIS_PROMPT = `당신은 PawInsight AI 반려동물 건강 관찰 도우미입니다.
 중요: 수의사가 아닙니다. 진단이 아닌 관찰 정보만 제공합니다.
@@ -81,32 +82,39 @@ export function resolveImageUrl(imageUrl: string, baseUrl: string): string {
   return imageUrl;
 }
 
-/** localhost 업로드 이미지는 base64로 변환해 OpenRouter 접근 문제를 방지 */
+/** 업로드 이미지는 base64로 변환 (OpenRouter가 localhost/비공개 URL 접근 불가) */
 export async function resolveImageForVision(
   imageUrl: string,
   baseUrl: string
 ): Promise<string> {
-  if (imageUrl.startsWith("/uploads/")) {
-    const filePath = path.join(process.cwd(), "public", imageUrl);
-    const buffer = await fs.readFile(filePath);
-    const ext = path.extname(imageUrl).slice(1).toLowerCase();
+  const buffer = await resolveUploadBuffer(imageUrl);
+  if (buffer) {
+    const ext = path.extname(imageUrl.split("?")[0]).slice(1).toLowerCase();
     const mime = MIME_BY_EXT[ext] ?? "image/jpeg";
     return `data:${mime};base64,${buffer.toString("base64")}`;
   }
 
+  if (imageUrl.startsWith("/uploads/")) {
+    const filePath = path.join(process.cwd(), "public", imageUrl);
+    try {
+      const fileBuffer = await fs.readFile(filePath);
+      const ext = path.extname(imageUrl).slice(1).toLowerCase();
+      const mime = MIME_BY_EXT[ext] ?? "image/jpeg";
+      return `data:${mime};base64,${fileBuffer.toString("base64")}`;
+    } catch {
+      // fall through
+    }
+  }
+
   const resolved = resolveImageUrl(imageUrl, baseUrl);
-  if (
-    resolved.includes("localhost") ||
-    resolved.includes("127.0.0.1") ||
-    resolved.includes("/uploads/")
-  ) {
+  if (resolved.includes("localhost") || resolved.includes("127.0.0.1")) {
     try {
       const url = new URL(resolved);
       const filePath = path.join(process.cwd(), "public", url.pathname);
-      const buffer = await fs.readFile(filePath);
+      const fileBuffer = await fs.readFile(filePath);
       const ext = path.extname(url.pathname).slice(1).toLowerCase();
       const mime = MIME_BY_EXT[ext] ?? "image/jpeg";
-      return `data:${mime};base64,${buffer.toString("base64")}`;
+      return `data:${mime};base64,${fileBuffer.toString("base64")}`;
     } catch {
       return resolved;
     }
